@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-primary: #0A0F1E;
+    --bg-secondary: #0D1426;
+    --bg-card: #111827;
+    --border-subtle: rgba(108, 99, 255, 0.15);
+    --accent-purple: #6C63FF;
+    --accent-teal: #00F5D4;
+  }
+
+  html, body, #root {
+    @apply h-full;
+    background-color: var(--bg-primary);
+  }
+
+  * {
+    @apply border-0;
+    box-sizing: border-box;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0D1426;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #232D44;
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #6C63FF;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply rounded-2xl;
+    background: rgba(17, 24, 39, 0.8);
+    border: 1px solid rgba(108, 99, 255, 0.15);
+    backdrop-filter: blur(12px);
+  }
+
+  .glow-purple {
+    box-shadow: 0 0 20px rgba(108, 99, 255, 0.2);
+  }
+
+  .glow-teal {
+    box-shadow: 0 0 20px rgba(0, 245, 212, 0.2);
+  }
+
+  .status-dot {
+    @apply inline-block w-2 h-2 rounded-full;
+  }
+
+  .event-badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium font-mono;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    background: linear-gradient(135deg, #6C63FF, #00F5D4);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .animate-pulse-dot {
+    animation: pulseDot 2s ease-in-out infinite;
+  }
+
+  @keyframes pulseDot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.8); }
+  }
+}

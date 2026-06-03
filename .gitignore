@@ -1,0 +1,61 @@
+# ── Environment & Secrets ──────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+!.env.example
+
+# ── Python / Virtual Environments ──────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+pip-log.txt
+pip-delete-this-directory.txt
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Node / Frontend ────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.eslintcache
+.stylelintcache
+dist/
+build/
+.next/
+out/
+
+# ── Data, Models, & Videos ─────────────────────────────────────────────────
+# Ignore YOLO model weights, video samples, and mock event logs
+*.pt
+*.mp4
+*.avi
+*.mov
+*.jsonl
+*.log
+data/sample.mp4
+data/events.jsonl
+
+# ── IDEs & OS ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini

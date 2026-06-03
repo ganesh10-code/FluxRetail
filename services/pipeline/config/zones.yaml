@@ -1,0 +1,65 @@
+# FluxRetail Zone Configuration
+# Defines zone polygons and the virtual entry/exit line for the pipeline.
+#
+# All coordinates are NORMALISED (0.0–1.0) relative to frame width/height.
+# x=0,y=0 is top-left. x=1,y=1 is bottom-right.
+#
+# Each zone polygon is a list of [x, y] corner points (convex or concave).
+# The pipeline uses cv2.pointPolygonTest for containment checking.
+
+virtual_line:
+  # Horizontal line at this normalised Y position.
+  # Centroids crossing ABOVE this line (toward y=0) = ENTRY
+  # Centroids crossing BELOW this line (toward y=1) = EXIT
+  y: 0.4
+
+zones:
+  ENTRY_ZONE:
+    display_name: "Entry / Foyer"
+    # Top strip of the frame — just inside the entrance
+    polygon:
+      - [0.0, 0.0]
+      - [1.0, 0.0]
+      - [1.0, 0.25]
+      - [0.0, 0.25]
+    color: [0, 255, 128]
+
+  MAKEUP_ZONE:
+    display_name: "Makeup Section"
+    # Left side of store
+    polygon:
+      - [0.00, 0.30]
+      - [0.30, 0.30]
+      - [0.30, 0.75]
+      - [0.00, 0.75]
+    color: [255, 100, 200]
+
+  SKINCARE_ZONE:
+    display_name: "Skincare Section"
+    # Centre of store
+    polygon:
+      - [0.35, 0.30]
+      - [0.65, 0.30]
+      - [0.65, 0.75]
+      - [0.35, 0.75]
+    color: [100, 200, 255]
+
+  CENTER_ZONE:
+    display_name: "Center Aisle"
+    # Overlapping centre aisle — evaluated AFTER sectional zones
+    polygon:
+      - [0.30, 0.25]
+      - [0.70, 0.25]
+      - [0.70, 0.70]
+      - [0.30, 0.70]
+    color: [255, 255, 100]
+
+  BILLING_ZONE:
+    display_name: "Billing Counter"
+    # Bottom-right — used to detect conversion
+    polygon:
+      - [0.70, 0.65]
+      - [1.00, 0.65]
+      - [1.00, 1.00]
+      - [0.70, 1.00]
+    color: [50, 50, 255]

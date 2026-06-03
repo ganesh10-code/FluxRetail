@@ -1,0 +1,57 @@
+# FluxRetail Zone Configuration
+# All coordinates are NORMALISED (0.0 to 1.0) relative to frame dimensions.
+# This ensures zones work correctly at any video resolution.
+#
+# virtual_line: single horizontal line for ENTRY/EXIT detection
+#   y: normalised Y position (centroids above = inside, below = outside)
+#   direction_inside: 'above' | 'below' (which side of the line is "inside" the store)
+
+virtual_line:
+  y: 0.4
+  direction_inside: above  # centroids with y < line_y are "inside" the store
+
+zones:
+  ENTRY_ZONE:
+    display_name: "Entry / Foyer"
+    color: [0, 255, 100]  # BGR for OpenCV overlay
+    polygon:
+      - [0.0, 0.0]
+      - [1.0, 0.0]
+      - [1.0, 0.25]
+      - [0.0, 0.25]
+
+  BILLING_ZONE:
+    display_name: "Billing Counter"
+    color: [0, 100, 255]
+    polygon:
+      - [0.70, 0.65]
+      - [1.00, 0.65]
+      - [1.00, 1.00]
+      - [0.70, 1.00]
+
+  MAKEUP_ZONE:
+    display_name: "Makeup Section"
+    color: [255, 0, 200]
+    polygon:
+      - [0.00, 0.30]
+      - [0.30, 0.30]
+      - [0.30, 0.75]
+      - [0.00, 0.75]
+
+  SKINCARE_ZONE:
+    display_name: "Skincare Section"
+    color: [200, 100, 0]
+    polygon:
+      - [0.35, 0.30]
+      - [0.65, 0.30]
+      - [0.65, 0.75]
+      - [0.35, 0.75]
+
+  CENTER_ZONE:
+    display_name: "Center Aisle"
+    color: [0, 200, 200]
+    polygon:
+      - [0.30, 0.25]
+      - [0.70, 0.25]
+      - [0.70, 0.70]
+      - [0.30, 0.70]
