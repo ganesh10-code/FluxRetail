@@ -60,6 +60,20 @@
   .event-badge {
     @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium font-mono;
   }
+
+  /* Severity badge colours */
+  .badge-high {
+    background: rgba(244, 63, 94, 0.15);
+    color: #F43F5E;
+  }
+  .badge-medium {
+    background: rgba(245, 158, 11, 0.15);
+    color: #F59E0B;
+  }
+  .badge-low {
+    background: rgba(59, 130, 246, 0.15);
+    color: #60A5FA;
+  }
 }
 
 @layer utilities {
@@ -74,8 +88,26 @@
     animation: pulseDot 2s ease-in-out infinite;
   }
 
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-out both;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.35s ease-out both;
+  }
+
   @keyframes pulseDot {
     0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.5; transform: scale(0.8); }
+    50%       { opacity: 0.5; transform: scale(0.8); }
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
 }

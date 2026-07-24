@@ -32,9 +32,9 @@ class EventGenerator:
         events = gen.generate(tracked, zone_events, timestamp, store_id, camera_id)
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, billing_zone_id: str = "BILLING_ZONE") -> None:
         self._settings = settings
-        self._session_manager = SessionManager(settings)
+        self._session_manager = SessionManager(settings, billing_zone_id)
 
     def generate(
         self,

@@ -1,0 +1,31 @@
+# Python
+venv
+__pycache__
+*.pyc
+.pytest_cache
+
+# Node
+node_modules
+dist
+
+# Git
+.git
+
+# Media
+data
+*.mp4
+*.avi
+*.mov
+
+# Frames
+frames
+
+# Cache
+.cache
+
+# Docker
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

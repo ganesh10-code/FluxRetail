@@ -9,12 +9,13 @@ services:
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@127.0.0.1:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -23,7 +24,7 @@ services:
       KAFKA_LOG_SEGMENT_BYTES: 104857600
       CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
     ports:
-      - '9092:9092'
+      - '9092:9094'
     healthcheck:
       test: ['CMD', '/opt/kafka/bin/kafka-topics.sh', '--bootstrap-server', 'localhost:9092', '--list']
       interval: 15s
@@ -73,6 +74,103 @@ services:
       start_period: 10s
     volumes:
       - redis_data:/data
+    networks:
+      - fluxretail
+
+  # ── FastAPI Backend ────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./services/api
+      dockerfile: Dockerfile
+    container_name: fluxretail-api
+    hostname: api
+    environment:
+      # Use container service names for all internal connections
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fluxretail}:${POSTGRES_PASSWORD:-fluxretail_secret}@postgres:5432/${POSTGRES_DB:-fluxretail}
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_EVENTS_TOPIC: fluxretail.events
+      STORE_ID: store_1
+      LOG_LEVEL: INFO
+      LOG_FORMAT: json
+      CORS_ORIGINS: "http://localhost:5173,http://dashboard:5173"
+      HEALTH_STALE_FEED_TIMEOUT_SECONDS: 60
+      HEALTH_PIPELINE_HEARTBEAT_TIMEOUT_SECONDS: 30
+    ports:
+      - '8000:8000'
+    volumes:
+      # Mount shared data directory at /app/data — matches get_project_root() fallback to os.getcwd()=/app
+      - ./data:/app/data:rw
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8000/health']
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 30s
+    networks:
+      - fluxretail
+
+  # ── CV Pipeline ───────────────────────────────────────────────────────────
+  pipeline:
+    build:
+      context: ./services/pipeline
+      dockerfile: Dockerfile
+    container_name: fluxretail-pipeline
+    hostname: pipeline
+    environment:
+      # Use container service names
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_EVENTS_TOPIC: fluxretail.events
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fluxretail}:${POSTGRES_PASSWORD:-fluxretail_secret}@postgres:5432/${POSTGRES_DB:-fluxretail}
+      STORE_ID: store_1
+      PIPELINE_MODE: live
+      VIDEO_PATH: /app/data/store_1/entry/main_entry.mp4
+      YOLO_MODEL: yolov8n.pt
+      DETECTION_CONFIDENCE: '0.4'
+      DEVICE: cpu
+      OMP_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      FRAME_SKIP: '5'
+      REPLAY_SPEED_MULTIPLIER: '2.0'
+      ZONES_CONFIG_PATH: /app/config/zones.yaml
+      LOG_LEVEL: INFO
+      LOG_FORMAT: json
+    volumes:
+      # Mount at /app/data and /app/config — matches WORKDIR /app fallback in get_project_root()
+      - ./data:/app/data:rw
+      - ./config:/app/config:ro
+    depends_on:
+      kafka:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    networks:
+      - fluxretail
+
+  # ── React Dashboard ────────────────────────────────────────────────────────
+  dashboard:
+    build:
+      context: ./services/dashboard
+      dockerfile: Dockerfile
+    container_name: fluxretail-dashboard
+    hostname: dashboard
+    environment:
+      # Vite proxy will route /api and /ws to the api container
+      VITE_API_TARGET: http://api:8000
+      VITE_WS_TARGET: ws://api:8000
+    ports:
+      - '5173:5173'
+    depends_on:
+      api:
+        condition: service_healthy
     networks:
       - fluxretail
 

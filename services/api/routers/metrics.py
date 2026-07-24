@@ -90,11 +90,18 @@ async def get_store_metrics(
         row[0]: row[1] for row in zone_breakdown_result.fetchall()
     }
 
-    # Conversion rate — visitors who entered the BILLING_ZONE
+    # Conversion rate — visitors who entered the billing zone dynamically defined in config
+    from config_loader import load_store_config
+    try:
+        store_config = load_store_config(store_id)
+        billing_zone_id = store_config.get_billing_zone_id()
+    except Exception:
+        billing_zone_id = "checkout"
+
     converted_stmt = (
         select(func.count(func.distinct(EventModel.visitor_id)))
         .where(EventModel.store_id == store_id)
-        .where(EventModel.zone_id == "BILLING_ZONE")
+        .where(EventModel.zone_id == billing_zone_id)
         .where(EventModel.event_timestamp >= period_start)
     )
     converted_result = await db.execute(converted_stmt)
@@ -127,25 +134,63 @@ async def get_store_funnel(
     now = datetime.now(timezone.utc)
     period_start = now - timedelta(hours=hours)
 
-    zones_ordered = [
-        "ENTRY_ZONE",
-        "CENTER_ZONE",
-        "MAKEUP_ZONE",
-        "SKINCARE_ZONE",
-        "BILLING_ZONE",
-    ]
-    stages: list[dict[str, Any]] = []
-
-    for zone in zones_ordered:
-        stmt = (
+    from config_loader import load_store_config
+    try:
+        store_config = load_store_config(store_id)
+        # 1. Entry stage first
+        entry_stmt = (
             select(func.count(func.distinct(EventModel.visitor_id)))
             .where(EventModel.store_id == store_id)
-            .where(EventModel.zone_id == zone)
+            .where(EventModel.event_type == "ENTRY")
             .where(EventModel.event_timestamp >= period_start)
         )
-        result = await db.execute(stmt)
-        count: int = result.scalar() or 0
-        stages.append({"zone_id": zone, "visitor_count": count})
+        entry_result = await db.execute(entry_stmt)
+        stages = [{"zone_id": "Entry", "visitor_count": entry_result.scalar() or 0}]
+
+        # 2. Middle retail zones
+        billing_zone_id = store_config.get_billing_zone_id()
+        for zone_id in store_config.zones:
+            if zone_id == billing_zone_id:
+                continue
+            stmt = (
+                select(func.count(func.distinct(EventModel.visitor_id)))
+                .where(EventModel.store_id == store_id)
+                .where(EventModel.zone_id == zone_id)
+                .where(EventModel.event_timestamp >= period_start)
+            )
+            result = await db.execute(stmt)
+            stages.append({"zone_id": store_config.get_zone_display_name(zone_id), "visitor_count": result.scalar() or 0})
+
+        # 3. Billing zone last
+        billing_stmt = (
+            select(func.count(func.distinct(EventModel.visitor_id)))
+            .where(EventModel.store_id == store_id)
+            .where(EventModel.zone_id == billing_zone_id)
+            .where(EventModel.event_timestamp >= period_start)
+        )
+        billing_result = await db.execute(billing_stmt)
+        stages.append({"zone_id": store_config.get_zone_display_name(billing_zone_id), "visitor_count": billing_result.scalar() or 0})
+    except Exception as exc:
+        logger.exception("funnel_load_failed", error=str(exc))
+        # Fallback to defaults if store config fails to load
+        zones_ordered = [
+            "ENTRY_ZONE",
+            "CENTER_ZONE",
+            "MAKEUP_ZONE",
+            "SKINCARE_ZONE",
+            "BILLING_ZONE",
+        ]
+        stages = []
+        for zone in zones_ordered:
+            stmt = (
+                select(func.count(func.distinct(EventModel.visitor_id)))
+                .where(EventModel.store_id == store_id)
+                .where(EventModel.zone_id == zone)
+                .where(EventModel.event_timestamp >= period_start)
+            )
+            result = await db.execute(stmt)
+            count: int = result.scalar() or 0
+            stages.append({"zone_id": zone, "visitor_count": count})
 
     return FunnelResponse(store_id=store_id, stages=stages)
 
@@ -202,22 +247,31 @@ async def get_anomalies(
     hours: int = Query(default=1, ge=1, le=24),
 ) -> AnomalyResponse:
     """
-    Detect operational anomalies from recent event patterns.
+    Detect operational anomalies from recent event patterns in the database.
 
     Anomaly rules:
-    - QUEUE_BUILD:     >3 visitors entered BILLING_ZONE in last 10 minutes
-    - NO_ENTRIES:      0 ENTRY events in the last 30 minutes
-    - HIGH_EXIT_RATE:  >5 EXIT events in the last 5 minutes
+    - QUEUE_CONGESTION:    >3 visitors at billing counter in last 10 minutes (severity: high)
+    - ZONE_OVERCROWDING:   >5 visitors in a retail zone in last 10 minutes (severity: medium)
+    - LONG_DWELL:          avg dwell time > 60s in any zone in last 1 hour (severity: low)
+    - LOW_CONVERSION:      conversion rate < 20% in last 1 hour (minimum 5 entries) (severity: medium)
     """
     now = datetime.now(timezone.utc)
     anomalies: list[dict[str, Any]] = []
 
-    # Rule 1: Queue building at billing counter
+    from config_loader import load_store_config
+    try:
+        store_config = load_store_config(store_id)
+        billing_zone_id = store_config.get_billing_zone_id()
+    except Exception:
+        billing_zone_id = "checkout"
+        store_config = None
+
+    # 1. Queue Congestion (High Severity)
     billing_window = now - timedelta(minutes=10)
     billing_stmt = (
         select(func.count(func.distinct(EventModel.visitor_id)))
         .where(EventModel.store_id == store_id)
-        .where(EventModel.zone_id == "BILLING_ZONE")
+        .where(EventModel.zone_id == billing_zone_id)
         .where(EventModel.event_type == "ZONE_ENTER")
         .where(EventModel.event_timestamp >= billing_window)
     )
@@ -225,46 +279,83 @@ async def get_anomalies(
     billing_visitors: int = billing_result.scalar() or 0
     if billing_visitors > 3:
         anomalies.append({
-            "type": "QUEUE_BUILD",
-            "severity": "warning",
+            "type": "QUEUE_CONGESTION",
+            "severity": "high",
             "detail": f"{billing_visitors} visitors at billing counter in last 10 minutes",
             "detected_at": now.isoformat(),
+            "affected_zone": store_config.get_zone_display_name(billing_zone_id) if store_config else billing_zone_id.replace('_', ' ').title(),
         })
 
-    # Rule 2: No entries in last 30 minutes
-    entry_window = now - timedelta(minutes=30)
-    entry_stmt = (
-        select(func.count(EventModel.id))
-        .where(EventModel.store_id == store_id)
-        .where(EventModel.event_type == "ENTRY")
-        .where(EventModel.event_timestamp >= entry_window)
-    )
-    entry_result = await db.execute(entry_stmt)
-    entry_count: int = entry_result.scalar() or 0
-    if entry_count == 0:
-        anomalies.append({
-            "type": "NO_ENTRIES",
-            "severity": "info",
-            "detail": "No visitor entries detected in the last 30 minutes",
-            "detected_at": now.isoformat(),
-        })
+    if store_config:
+        # 2. Zone Overcrowding (Medium Severity)
+        for zone in store_config.zones:
+            if zone == billing_zone_id:
+                continue
+            zone_stmt = (
+                select(func.count(func.distinct(EventModel.visitor_id)))
+                .where(EventModel.store_id == store_id)
+                .where(EventModel.zone_id == zone)
+                .where(EventModel.event_type == "ZONE_ENTER")
+                .where(EventModel.event_timestamp >= billing_window)
+            )
+            zone_result = await db.execute(zone_stmt)
+            zone_visitors = zone_result.scalar() or 0
+            if zone_visitors > 5:
+                anomalies.append({
+                    "type": "ZONE_OVERCROWDING",
+                    "severity": "medium",
+                    "detail": f"{store_config.get_zone_display_name(zone)} zone has {zone_visitors} active shoppers in the last 10 minutes",
+                    "detected_at": now.isoformat(),
+                    "affected_zone": store_config.get_zone_display_name(zone),
+                })
 
-    # Rule 3: High exit rate
-    exit_window = now - timedelta(minutes=5)
-    exit_stmt = (
-        select(func.count(EventModel.id))
-        .where(EventModel.store_id == store_id)
-        .where(EventModel.event_type == "EXIT")
-        .where(EventModel.event_timestamp >= exit_window)
-    )
-    exit_result = await db.execute(exit_stmt)
-    exit_count: int = exit_result.scalar() or 0
-    if exit_count > 5:
-        anomalies.append({
-            "type": "HIGH_EXIT_RATE",
-            "severity": "warning",
-            "detail": f"{exit_count} exits in the last 5 minutes — possible store closing or event",
-            "detected_at": now.isoformat(),
-        })
+        # 3. Long Dwell (Low Severity)
+        dwell_window = now - timedelta(hours=1)
+        for zone in store_config.zones:
+            dwell_stmt = (
+                select(func.avg(EventModel.dwell_ms))
+                .where(EventModel.store_id == store_id)
+                .where(EventModel.zone_id == zone)
+                .where(EventModel.event_timestamp >= dwell_window)
+            )
+            dwell_res = await db.execute(dwell_stmt)
+            avg_dwell = dwell_res.scalar() or 0.0
+            if avg_dwell > 60000:
+                anomalies.append({
+                    "type": "LONG_DWELL",
+                    "severity": "low",
+                    "detail": f"Shoppers dwelling for an average of {round(avg_dwell / 1000, 1)}s in {store_config.get_zone_display_name(zone)}",
+                    "detected_at": now.isoformat(),
+                    "affected_zone": store_config.get_zone_display_name(zone),
+                })
+
+        # 4. Low Conversion (Medium Severity)
+        conversion_window = now - timedelta(hours=1)
+        entries_stmt = (
+            select(func.count(func.distinct(EventModel.visitor_id)))
+            .where(EventModel.store_id == store_id)
+            .where(EventModel.event_type == "ENTRY")
+            .where(EventModel.event_timestamp >= conversion_window)
+        )
+        entries_res = await db.execute(entries_stmt)
+        total_ents = entries_res.scalar() or 0
+        if total_ents >= 5:
+            conv_stmt = (
+                select(func.count(func.distinct(EventModel.visitor_id)))
+                .where(EventModel.store_id == store_id)
+                .where(EventModel.zone_id == billing_zone_id)
+                .where(EventModel.event_timestamp >= conversion_window)
+            )
+            conv_res = await db.execute(conv_stmt)
+            conv_count = conv_res.scalar() or 0
+            conv_rate = (conv_count / total_ents) * 100
+            if conv_rate < 20.0:
+                anomalies.append({
+                    "type": "LOW_CONVERSION",
+                    "severity": "medium",
+                    "detail": f"Low checkout conversion rate of {round(conv_rate, 1)}% (out of {total_ents} visitors in the last hour)",
+                    "detected_at": now.isoformat(),
+                    "affected_zone": store_config.get_zone_display_name(billing_zone_id) if store_config else billing_zone_id.replace('_', ' ').title(),
+                })
 
     return AnomalyResponse(store_id=store_id, anomalies=anomalies)

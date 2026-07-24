@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     )
 
     # ── Identity ────────────────────────────────────────────────────────────
-    store_id: str = Field(default="store_001", description="Logical store identifier")
+    store_id: str = Field(default="store_1", description="Logical store identifier")
     camera_id: str = Field(default="cam_01", description="Camera identifier")
 
     # ── Pipeline mode ────────────────────────────────────────────────────────

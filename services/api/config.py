@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     )
 
     # ── Identity ─────────────────────────────────────────────────────────────
-    store_id: str = Field(default="store_001")
+    store_id: str = Field(default="store_1")
 
     # ── Database ──────────────────────────────────────────────────────────────
     database_url: str = Field(

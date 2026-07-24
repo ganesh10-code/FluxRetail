@@ -1,0 +1,64 @@
+store_id: store_2
+store_name: "Purplle Express Store"
+
+layout_image: data/store_2/layouts/layout.png
+
+# =========================================================
+# CAMERA CONFIGURATION
+# =========================================================
+cameras:
+  north_entry_cam:
+    camera_id: cam_north_entry_01
+    name: "North Entrance"
+    type: ENTRY
+    video_path: data/store_2/entry/north_entry.mp4
+    enabled: true
+    frame_skip: 5
+    entry_line:
+      start: [0.05, 0.45]
+      end: [0.95, 0.45]
+
+  south_entry_cam:
+    camera_id: cam_south_entry_01
+    name: "South Entrance"
+    type: ENTRY
+    video_path: data/store_2/entry/south_entry.mp4
+    enabled: true
+    frame_skip: 5
+    entry_line:
+      start: [0.05, 0.45]
+      end: [0.95, 0.45]
+
+  billing_cam:
+    camera_id: cam_billing_02
+    name: "Checkout Counter"
+    type: BILLING
+    video_path: data/store_2/billing/checkout_counter.mp4
+    enabled: true
+    frame_skip: 5
+    queue_threshold: 4
+
+  central_zone_cam:
+    camera_id: cam_zone_03
+    name: "Central Retail Zone"
+    type: ZONE
+    video_path: data/store_2/zones/central_zone.mp4
+    enabled: true
+    frame_skip: 5
+    monitored_zone: central_retail
+
+# =========================================================
+# STORE ZONES
+# =========================================================
+zones:
+  central_retail:
+    zone_id: central_retail
+    display_name: "Central Retail Zone"
+
+# =========================================================
+# ANALYTICS CONFIGURATION
+# =========================================================
+analytics:
+  multi_entry_enabled: true
+  dwell_alert_seconds: 240
+  queue_threshold: 4

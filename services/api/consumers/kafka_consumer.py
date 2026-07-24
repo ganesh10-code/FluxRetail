@@ -7,6 +7,14 @@ Consumes from fluxretail.events and:
   3. Accumulates in-memory KPI state
   4. Broadcasts compact KPI updates every 2 seconds
   5. Updates Redis with latest event timestamp (for /health staleness check)
+
+Occupancy correctness rules:
+  - ENTRY event  → add visitor_id to active set
+  - EXIT event   → remove visitor_id from active set
+  - All others   → do NOT touch active set (prevents inflation from zone events)
+  - Stale sessions (no update for >120 s) are pruned in to_kpi_dict()
+  - active_visitors is always capped at total_visitors_today
+  - Deduplication uses a set (O(1)) — no size cap needed
 """
 
 from __future__ import annotations
@@ -14,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import redis.asyncio as aioredis
@@ -36,6 +44,9 @@ REDIS_PIPELINE_HEARTBEAT_KEY = "fluxretail:pipeline_heartbeat"
 # KPI broadcast interval in seconds
 KPI_BROADCAST_INTERVAL = 2.0
 
+# Active session stale timeout in seconds
+_ACTIVE_SESSION_TTL_SECONDS = 120
+
 
 class KPIAccumulator:
     """
@@ -43,6 +54,9 @@ class KPIAccumulator:
 
     Aggregates event stream into compact store metrics that are
     broadcast to the dashboard every KPI_BROADCAST_INTERVAL seconds.
+
+    Occupancy invariant:
+        active_visitors ≤ total_visitors_today at all times.
     """
 
     def __init__(self) -> None:
@@ -52,39 +66,92 @@ class KPIAccumulator:
         self.event_type_counts: dict[str, int] = defaultdict(int)
         self.conversions: int = 0
         self.last_event_ts: datetime | None = None
+
+        # Occupancy tracking — only ENTRY/EXIT mutate these
         self._active_visitor_ids: set[str] = set()
         self._exited_visitor_ids: set[str] = set()
+        self._all_visitor_ids: set[str] = set()
+        # Maps visitor_id → last event wall-clock time (for stale pruning)
+        self._active_visitor_last_seen: dict[str, datetime] = {}
+
+        # Conversion tracking — set ensures we count each visitor exactly once
+        self._converted_visitor_ids: set[str] = set()
+
+        # Deduplication — set for O(1) lookup; no size cap needed
+        self._processed_event_ids: set[str] = set()
 
     def ingest(self, event: dict[str, Any]) -> None:
         """Update accumulators from a new event."""
+        event_id = event.get("event_id")
+        if not event_id:
+            return
+
+        # Deduplication — skip events already seen in this session
+        if event_id in self._processed_event_ids:
+            return
+        self._processed_event_ids.add(event_id)
+
         self.total_events += 1
         event_type = event.get("event_type", "")
         visitor_id = event.get("visitor_id", "")
         zone_id = event.get("zone_id")
         metadata = event.get("metadata", {})
+        now = datetime.now(timezone.utc)
 
         self.event_type_counts[event_type] += 1
 
+        # Track total unique visitors (all-time for this session)
+        if visitor_id:
+            self._all_visitor_ids.add(visitor_id)
+            self.visitor_count = len(self._all_visitor_ids)
+
+        # ── Occupancy: only ENTRY increments, only EXIT decrements ──────────
         if event_type == "ENTRY":
             self._active_visitor_ids.add(visitor_id)
-            self.visitor_count += 1
+            self._active_visitor_last_seen[visitor_id] = now
+            self._exited_visitor_ids.discard(visitor_id)
         elif event_type == "EXIT":
             self._active_visitor_ids.discard(visitor_id)
+            self._active_visitor_last_seen.pop(visitor_id, None)
             self._exited_visitor_ids.add(visitor_id)
+        else:
+            # Zone events (ZONE_ENTER, ZONE_DWELL, ZONE_EXIT): refresh last-seen
+            # for visitors already active, but do NOT auto-add new visitors.
+            if visitor_id and visitor_id in self._active_visitor_ids:
+                self._active_visitor_last_seen[visitor_id] = now
 
         if zone_id:
             self.zone_counts[zone_id] += 1
 
+        # Track conversions — count each visitor at most once
         if (
             metadata.get("conversion_status") == "CONVERTED"
-            and visitor_id not in self._exited_visitor_ids
+            and visitor_id
+            and visitor_id not in self._converted_visitor_ids
         ):
-            self.conversions += 1
+            self._converted_visitor_ids.add(visitor_id)
+            self.conversions = len(self._converted_visitor_ids)
 
-        self.last_event_ts = datetime.now(timezone.utc)
+        self.last_event_ts = now
 
     def to_kpi_dict(self) -> dict[str, Any]:
-        active = len(self._active_visitor_ids)
+        """Return a KPI snapshot, pruning stale active sessions first."""
+        now = datetime.now(timezone.utc)
+        stale_limit = now - timedelta(seconds=_ACTIVE_SESSION_TTL_SECONDS)
+
+        # Expire active visitors who haven't had an event update recently
+        stale_vids = [
+            vid for vid, ts in list(self._active_visitor_last_seen.items())
+            if ts < stale_limit
+        ]
+        for vid in stale_vids:
+            self._active_visitor_ids.discard(vid)
+            self._active_visitor_last_seen.pop(vid, None)
+            logger.debug("active_session_expired", visitor_id=vid)
+
+        # Invariant: active_visitors must never exceed total_visitors_today
+        active = min(len(self._active_visitor_ids), self.visitor_count)
+
         peak_zone = (
             max(self.zone_counts, key=lambda k: self.zone_counts[k])
             if self.zone_counts
@@ -264,4 +331,3 @@ async def _kpi_broadcast_loop() -> None:
             break
         except Exception as exc:
             logger.warning("kpi_broadcast_error", error=str(exc))
-

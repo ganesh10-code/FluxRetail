@@ -88,11 +88,12 @@ class SessionManager:
         )
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, billing_zone_id: str = "BILLING_ZONE") -> None:
         self._settings = settings
         self._sessions: dict[int, VisitorSession] = {}  # track_id → session
         # Map visitor_id → track_id for re-entry matching
         self._visitor_history: list[VisitorSession] = []
+        self._billing_zone_id = billing_zone_id
 
     def process(
         self,
@@ -161,7 +162,7 @@ class SessionManager:
             # Update zone history
             if ze.zone_id:
                 session.zones_visited.add(ze.zone_id)
-                if ze.zone_id == BILLING_ZONE_ID and event_type in (
+                if ze.zone_id == self._billing_zone_id and event_type in (
                     EventType.ZONE_ENTER,
                     EventType.ZONE_DWELL,
                 ):

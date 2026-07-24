@@ -1,0 +1,105 @@
+store_id: store_1
+store_name: "Purplle Flagship Store"
+
+layout_image: data/store_1/layouts/layout.png
+
+# =========================================================
+# CAMERA CONFIGURATION
+# =========================================================
+cameras:
+  entry_cam:
+    camera_id: cam_entry_01
+    name: "Main Entrance"
+    type: ENTRY
+    video_path: data/store_1/entry/main_entry.mp4
+    enabled: true
+    frame_skip: 5
+    entry_line:
+      start: [0.05, 0.42]
+      end: [0.95, 0.42]
+    exit_line:
+      start: [0.05, 0.52]
+      end: [0.95, 0.52]
+
+  billing_cam:
+    camera_id: cam_billing_01
+    name: "Checkout Counter"
+    type: BILLING
+    video_path: data/store_1/billing/checkout_counter.mp4
+    enabled: true
+    frame_skip: 5
+    billing_zone:
+      polygon:
+        - [0.08, 0.15]
+        - [0.92, 0.15]
+        - [0.92, 0.92]
+        - [0.08, 0.92]
+    queue_threshold: 5
+
+  cosmetics_zone_cam:
+    camera_id: cam_zone_01
+    name: "Cosmetics Zone"
+    type: ZONE
+    video_path: data/store_1/zones/cosmetics_zone.mp4
+    enabled: true
+    frame_skip: 5
+    monitored_zone: cosmetics
+
+  skincare_zone_cam:
+    camera_id: cam_zone_02
+    name: "Skincare Zone"
+    type: ZONE
+    video_path: data/store_1/zones/skincare_zone.mp4
+    enabled: true
+    frame_skip: 5
+    monitored_zone: skincare
+
+# =========================================================
+# STORE ZONES
+# =========================================================
+zones:
+  cosmetics:
+    zone_id: cosmetics
+    display_name: "Cosmetics"
+    polygon:
+      - [0.10, 0.10]
+      - [0.45, 0.10]
+      - [0.45, 0.45]
+      - [0.10, 0.45]
+
+  skincare:
+    zone_id: skincare
+    display_name: "Skincare"
+    polygon:
+      - [0.50, 0.10]
+      - [0.90, 0.10]
+      - [0.90, 0.45]
+      - [0.50, 0.45]
+
+  checkout:
+    zone_id: checkout
+    display_name: "Checkout"
+    polygon:
+      - [0.60, 0.60]
+      - [0.95, 0.60]
+      - [0.95, 0.95]
+      - [0.60, 0.95]
+
+# =========================================================
+# ANALYTICS CONFIGURATION
+# =========================================================
+analytics:
+  dwell_alert_seconds: 300
+  congestion_threshold: 15
+  inactivity_threshold_seconds: 120
+  conversion_window_seconds: 180
+
+# =========================================================
+# DASHBOARD CONFIGURATION
+# =========================================================
+dashboard:
+  default_camera: entry_cam
+  show_live_frames: true
+  refresh_interval_seconds: 2
+  enable_queue_alerts: true
+  enable_heatmap: true

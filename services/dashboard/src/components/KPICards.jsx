@@ -34,7 +34,7 @@ const KPI_CONFIG = [
     label: 'Peak Zone',
     icon: UserCheck,
     color: '#F43F5E',
-    format: (v) => v ? v.replace('_', ' ') : '—',
+    format: (v) => v ? v.replace(/_ZONE/g, '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) : '—',
   },
 ]
 
@@ -42,21 +42,20 @@ function KPICard({ config, value, isNew }) {
   const Icon = config.icon
   return (
     <div
-      className={`glass-card p-5 flex flex-col gap-3 transition-all duration-300 ${isNew ? 'animate-slide-up' : ''}`}
-      style={{ borderColor: `${config.color}22` }}
+      className={`glass-card p-6 flex flex-col justify-between transition-all duration-300 hover:scale-[1.02] hover:shadow-lg ${isNew ? 'animate-slide-up' : ''}`}
+      style={{ borderLeft: `4px solid ${config.color}`, borderColor: `${config.color}22` }}
     >
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-medium" style={{ color: '#6B7280' }}>{config.label}</span>
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-xs font-semibold tracking-wider uppercase" style={{ color: '#9CA3AF' }}>{config.label}</span>
         <div
           className="w-8 h-8 rounded-lg flex items-center justify-center"
-          style={{ background: `${config.color}18` }}
+          style={{ background: `${config.color}15` }}
         >
           <Icon size={16} style={{ color: config.color }} />
         </div>
       </div>
       <div
-        className="text-3xl font-bold tracking-tight"
-        style={{ color: config.color }}
+        className="text-3xl font-bold tracking-tight text-white font-sans"
       >
         {config.format(value)}
       </div>
@@ -66,7 +65,7 @@ function KPICard({ config, value, isNew }) {
 
 export function KPICards({ kpiData }) {
   return (
-    <div className="grid grid-cols-2 xl:grid-cols-5 gap-4">
+    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-6">
       {KPI_CONFIG.map((cfg) => (
         <KPICard
           key={cfg.key}

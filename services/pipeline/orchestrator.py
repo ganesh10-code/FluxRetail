@@ -17,14 +17,30 @@ Design:
   - All orchestration logic lives here, not in main.py
   - LIVE and REPLAY modes are implemented as separate private methods
   - The orchestrator owns all component lifetimes
+
+Stability notes:
+  - OMP_NUM_THREADS / MKL_NUM_THREADS are clamped to 1 here, before any
+    CV/torch imports, to prevent OpenMP thread explosion across camera threads.
+  - YOLO is loaded exactly ONCE via detector.get_singleton_detector(); all
+    camera threads share the same model instance.
+  - OpenCV decode threads are set to 1 per thread to reduce CPU contention.
+  - FFmpeg decode failures are caught and retried with VideoCapture reconnect.
 """
 
 from __future__ import annotations
+
+# ── Thread-count constraints — must be set before importing CV/torch ─────────
+import os
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
 import json
 import signal
 import sys
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -33,7 +49,7 @@ import redis
 import structlog
 
 from config import PipelineMode, Settings
-from detector import PersonDetector
+from detector import PersonDetector, get_singleton_detector
 from event_generator import EventGenerator
 from kafka_producer import RetailEventProducer
 from models import Detection, RetailEvent, TrackedPerson
@@ -47,6 +63,11 @@ REDIS_PIPELINE_HEARTBEAT_KEY = "fluxretail:pipeline_heartbeat"
 # Heartbeat TTL: if pipeline crashes, key expires so /health reports PIPELINE_STALE
 REDIS_HEARTBEAT_TTL_SECONDS = 120
 
+# Max consecutive decode failures before attempting VideoCapture reconnect
+_MAX_DECODE_FAILURES = 10
+
+
+import threading
 
 class PipelineOrchestrator:
     """
@@ -61,6 +82,7 @@ class PipelineOrchestrator:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._running = False
+        self._events_file_lock = threading.Lock()
 
         # Pipeline components — initialised in _setup()
         self._detector: PersonDetector | None = None
@@ -149,17 +171,14 @@ class PipelineOrchestrator:
         logger.info("pipeline_setup_complete")
 
     def _setup_live_components(self) -> None:
-        """Load CV components for LIVE mode."""
-        self._detector = PersonDetector(self._settings)
-        self._detector.load()
-
-        self._tracker = PersonTracker()
-        self._tracker.load()
-
-        self._zone_mapper = ZoneMapper(self._settings)
-        self._zone_mapper.load()
-
-        self._event_generator = EventGenerator(self._settings)
+        """
+        Prime the YOLO singleton so the model is loaded before any camera
+        threads start. All threads will then share this single instance.
+        """
+        # Loading once here prevents each camera thread from independently
+        # loading YOLO, which would exhaust OMP threads and cause crashes.
+        self._detector = get_singleton_detector(self._settings)
+        logger.info("yolo_singleton_primed")
 
         # Ensure output directory for events.jsonl exists
         self._events_file.parent.mkdir(parents=True, exist_ok=True)
@@ -184,69 +203,196 @@ class PipelineOrchestrator:
     def _run_live(self) -> None:
         """
         LIVE pipeline mode.
-
-        Opens the video file with OpenCV, processes every Nth frame through
-        the full detection → tracking → zone → event → Kafka pipeline.
-        Also writes events to events.jsonl for future replay.
+        Loads the store configuration, spawns parallel threads for enabled cameras,
+        and starts replay analytics for inactive cameras to ensure CPU stability.
         """
-        import cv2
+        from config_loader import load_store_config
+        store_config = load_store_config(self._settings.store_id)
 
-        video_path = self._settings.video_path
-        if not video_path.exists():
-            raise FileNotFoundError(
-                f"Video file not found: {video_path}. "
-                "Place your CCTV video at data/sample.mp4 or set VIDEO_PATH in .env"
-            )
-
-        cap = cv2.VideoCapture(str(video_path))
-        if not cap.isOpened():
-            raise RuntimeError(f"Failed to open video file: {video_path}")
-
-        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-        frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        frame_skip = self._settings.frame_skip
+        enabled_cameras = [
+            cam_cfg for cam_cfg in store_config.cameras.values()
+            if cam_cfg.get("enabled", True)
+        ]
 
         logger.info(
-            "live_pipeline_start",
-            video=str(video_path),
-            fps=fps,
-            resolution=f"{frame_w}x{frame_h}",
-            total_frames=total_frames,
-            frame_skip=frame_skip,
+            "live_pipeline_multicamera_start",
+            store_id=store_config.store_id,
+            store_name=store_config.store_name,
+            total_cameras=len(enabled_cameras),
         )
 
+        threads: list[threading.Thread] = []
+        inactive_camera_ids: list[str] = []
+
+        # 1. Spawn camera feed threads
+        for cam_cfg in enabled_cameras:
+            camera_id = cam_cfg["camera_id"]
+            # Active cameras for store_1 are cam_entry_01 and cam_zone_01.
+            # All other cameras (and all cameras of store_2) are inactive.
+            is_active = (
+                store_config.store_id == "store_1"
+                and camera_id in ("cam_entry_01", "cam_zone_01")
+            )
+            if not is_active:
+                inactive_camera_ids.append(camera_id)
+
+            t = threading.Thread(
+                target=self._run_camera_thread,
+                args=(cam_cfg, store_config),
+                name=f"cam-{camera_id}",
+                daemon=True,
+            )
+            threads.append(t)
+            t.start()
+
+        # 2. Spawn replay analytics thread for inactive cameras
+        if inactive_camera_ids:
+            replay_t = threading.Thread(
+                target=self._run_replay_analytics_thread,
+                args=(store_config, inactive_camera_ids),
+                name="replay-analytics",
+                daemon=True,
+            )
+            threads.append(replay_t)
+            replay_t.start()
+
+        # Keep orchestrator thread active
+        while self._running:
+            alive = any(t.is_alive() for t in threads)
+            if not alive:
+                logger.info("all_threads_terminated")
+                break
+            time.sleep(1.0)
+
+    def _run_camera_thread(self, cam_cfg: dict, store_config) -> None:
+        import cv2
+        from config_loader import get_project_root
+
+        # Clamp OpenCV decode threads to 1 to avoid CPU contention
+        cv2.setNumThreads(1)
+
+        camera_id = cam_cfg["camera_id"]
+        video_path = get_project_root() / cam_cfg["video_path"]
+
+        is_active = (
+            store_config.store_id == "store_1"
+            and camera_id in ("cam_entry_01", "cam_zone_01")
+        )
+
+        logger.info(
+            "camera_thread_start",
+            store_id=store_config.store_id,
+            camera_id=camera_id,
+            is_active=is_active,
+            video_path=str(video_path),
+        )
+
+        if not video_path.exists():
+            logger.error("camera_video_not_found", camera_id=camera_id, path=str(video_path))
+            return
+
+        def open_capture(path: str) -> cv2.VideoCapture:
+            cap = cv2.VideoCapture(path)
+            return cap
+
+        cap = open_capture(str(video_path))
+        if not cap.isOpened():
+            logger.error("camera_video_open_failed", camera_id=camera_id, path=str(video_path))
+            return
+
+        frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        frame_skip = cam_cfg.get("frame_skip", 5)
+
+        # ── Active-camera components — use shared singleton detector ─────────
+        tracker = None
+        zone_mapper = None
+        event_generator = None
+
+        if is_active:
+            # Re-use the singleton detector loaded once in _setup_live_components
+            detector = get_singleton_detector(self._settings)
+
+            tracker = PersonTracker()
+            tracker.load()
+
+            zone_mapper = ZoneMapper(self._settings, store_config, camera_id)
+            zone_mapper.load()
+
+            billing_zone_id = store_config.get_billing_zone_id()
+            event_generator = EventGenerator(self._settings, billing_zone_id)
+
         frame_idx = 0
-        processed_count = 0
-        event_count = 0
+        last_snapshot_time = 0.0
         video_start_time = datetime.now(timezone.utc)
+        consecutive_decode_failures = 0
 
         try:
-            with open(self._events_file, "w") as jsonl_out:
-                while self._running:
+            snapshot_dir = get_project_root() / "data" / "frames" / store_config.store_id / camera_id
+            snapshot_dir.mkdir(parents=True, exist_ok=True)
+            snapshot_path = snapshot_dir / "latest.jpg"
+
+            while self._running:
+                try:
                     ret, frame = cap.read()
-                    if not ret:
-                        logger.info("video_ended", total_processed=processed_count)
-                        break
+                except Exception as exc:
+                    logger.warning("frame_read_exception", camera_id=camera_id, error=str(exc))
+                    ret = False
+                    frame = None
 
-                    # ── Frame sampling ──────────────────────────────────────
-                    if frame_idx % frame_skip != 0:
-                        frame_idx += 1
+                if not ret or frame is None:
+                    consecutive_decode_failures += 1
+                    if consecutive_decode_failures == 1:
+                        # Try looping the video first
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                         continue
+                    if consecutive_decode_failures >= _MAX_DECODE_FAILURES:
+                        logger.warning(
+                            "camera_reconnecting",
+                            camera_id=camera_id,
+                            failures=consecutive_decode_failures,
+                        )
+                        cap.release()
+                        time.sleep(0.5)
+                        cap = open_capture(str(video_path))
+                        consecutive_decode_failures = 0
+                        video_start_time = datetime.now(timezone.utc)
+                    else:
+                        time.sleep(0.1)
+                    continue
 
+                consecutive_decode_failures = 0
+
+                if frame_idx % frame_skip != 0:
                     frame_idx += 1
-                    processed_count += 1
+                    continue
 
-                    # Derive wall-clock timestamp from video position.
-                    # cap.get(POS_MSEC) returns the position of the frame just read.
+                frame_idx += 1
+
+                # ── Snapshot export — every 1.5 s, regardless of active/inactive ──
+                current_time = time.time()
+                if current_time - last_snapshot_time >= 1.5:
+                    try:
+                        ok = cv2.imwrite(str(snapshot_path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+                        if not ok:
+                            logger.warning("snapshot_write_failed", camera_id=camera_id, path=str(snapshot_path))
+                        else:
+                            logger.debug("snapshot_written", camera_id=camera_id, ts=current_time)
+                    except Exception as exc:
+                        logger.warning("snapshot_exception", camera_id=camera_id, error=str(exc))
+                    last_snapshot_time = current_time
+
+                if is_active and tracker and zone_mapper and event_generator:
                     video_pos_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
                     frame_ts = video_start_time + timedelta(milliseconds=video_pos_ms)
 
-                    # ── Detection ───────────────────────────────────────────
-                    detections: list[Detection] = self._detector.detect(frame)
+                    try:
+                        detections = detector.detect(frame)
+                    except Exception as exc:
+                        logger.warning("detection_failed", camera_id=camera_id, error=str(exc))
+                        time.sleep(0.01)
+                        continue
 
-                    # ── Prepare numpy array for tracker ─────────────────────
                     if detections:
                         det_array = np.array(
                             [
@@ -261,56 +407,186 @@ class PipelineOrchestrator:
                     else:
                         det_array = np.empty((0, 6), dtype=np.float32)
 
-                    # ── Tracking ────────────────────────────────────────────
-                    tracked_persons: list[TrackedPerson] = self._tracker.update(
-                        det_array, frame, frame_idx, frame_ts
-                    )
+                    tracked_persons = tracker.update(det_array, frame, frame_idx, frame_ts)
 
-                    # ── Zone mapping ────────────────────────────────────────
-                    frame_ts_ms = video_pos_ms
-                    zone_events = self._zone_mapper.update(
-                        tracked_persons, frame_w, frame_h, frame_ts_ms
-                    )
+                    zone_events = zone_mapper.update(tracked_persons, frame_w, frame_h, video_pos_ms)
 
-                    # ── Event generation ────────────────────────────────────
-                    events: list[RetailEvent] = self._event_generator.generate(
+                    events = event_generator.generate(
                         tracked_persons=tracked_persons,
                         zone_events=zone_events,
                         frame_timestamp=frame_ts,
-                        store_id=self._settings.store_id,
-                        camera_id=self._settings.camera_id,
+                        store_id=store_config.store_id,
+                        camera_id=camera_id,
                     )
 
-                    # ── Publish to Kafka & write to JSONL ───────────────────
                     for event in events:
                         self._producer.publish(event)
                         event_dict = event.to_kafka_dict()
-                        jsonl_out.write(json.dumps(event_dict) + "\n")
-                        event_count += 1
+                        with self._events_file_lock:
+                            with open(self._events_file, "a") as jsonl_out:
+                                jsonl_out.write(json.dumps(event_dict) + "\n")
 
-                    # Write heartbeat to Redis on every processed frame
                     self._write_heartbeat(frame_ts)
 
-                    # Flush every 100 processed frames to avoid buffer buildup
-                    if processed_count % 100 == 0:
-                        self._producer.flush(timeout=2.0)
-                        jsonl_out.flush()
-                        logger.info(
-                            "live_progress",
-                            frame_idx=frame_idx,
-                            processed=processed_count,
-                            events_published=event_count,
-                            active_visitors=self._event_generator.active_visitors,
-                        )
+                time.sleep(0.01)
 
+        except Exception as exc:
+            logger.exception("camera_thread_crashed", camera_id=camera_id, error=str(exc))
         finally:
             cap.release()
-            logger.info(
-                "live_pipeline_done",
-                total_frames=frame_idx,
-                processed_frames=processed_count,
-                events_published=event_count,
-            )
+            logger.info("camera_thread_stopped", camera_id=camera_id)
+
+    def _run_replay_analytics_thread(self, store_config, inactive_cameras: list[str]) -> None:
+        logger.info("replay_analytics_thread_start", inactive_cameras=inactive_cameras)
+
+        from config_loader import get_project_root
+        events_path = self._settings.events_jsonl_path
+        if not events_path.exists():
+            events_path = get_project_root() / "services" / "pipeline" / "data" / "events.jsonl"
+            if not events_path.exists():
+                logger.warning("replay_analytics_events_file_missing", path=str(events_path))
+                return
+
+        speed = self._settings.replay_speed_multiplier
+
+        while self._running:
+            prev_event_ts = None
+
+            with open(events_path, "r") as f:
+                for line in f:
+                    if not self._running:
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    try:
+                        raw = json.loads(line)
+                        mapped = self._map_replay_event(raw, store_config)
+                    except Exception:
+                        continue
+
+                    if mapped.get("camera_id") not in inactive_cameras:
+                        continue
+
+                    try:
+                        event_ts = datetime.fromisoformat(mapped["timestamp"])
+                    except Exception:
+                        continue
+
+                    if prev_event_ts is not None:
+                        original_delta_s = (event_ts - prev_event_ts).total_seconds()
+                        if original_delta_s > 0:
+                            sleep_s = original_delta_s / speed
+                            sleep_s = min(sleep_s, 30.0)
+                            elapsed = 0.0
+                            step = 0.1
+                            while elapsed < sleep_s and self._running:
+                                time.sleep(min(step, sleep_s - elapsed))
+                                elapsed += step
+
+                    if not self._running:
+                        break
+
+                    prev_event_ts = event_ts
+
+                    mapped["timestamp"] = datetime.now(timezone.utc).isoformat()
+                    # Regenerate event_id so each replay loop iteration produces unique IDs,
+                    # preventing stale KPI deduplication that would suppress real events.
+                    mapped["event_id"] = str(uuid.uuid4())
+                    try:
+                        event = RetailEvent(**mapped)
+                        self._producer.publish(event)
+                        self._write_heartbeat(event.timestamp)
+                    except Exception as exc:
+                        logger.warning("replay_analytics_invalid_event", error=str(exc))
+
+            time.sleep(1.0)
+
+    def _map_replay_event(self, raw: dict, store_config) -> dict:
+        raw["store_id"] = store_config.store_id
+        event_type = raw.get("event_type", "")
+        orig_zone = raw.get("zone_id")
+
+        mapped_zone = None
+        if orig_zone:
+            orig_zone_lower = orig_zone.lower()
+            if "entry" in orig_zone_lower:
+                for target_zone_id in store_config.zones:
+                    if "entry" in target_zone_id.lower():
+                        mapped_zone = target_zone_id
+                        break
+            elif "makeup" in orig_zone_lower or "cosmetics" in orig_zone_lower:
+                for target_zone_id in store_config.zones:
+                    if "makeup" in target_zone_id.lower() or "cosmetics" in target_zone_id.lower():
+                        mapped_zone = target_zone_id
+                        break
+                if not mapped_zone:
+                    if "central_retail" in store_config.zones:
+                        mapped_zone = "central_retail"
+                    elif store_config.zones:
+                        mapped_zone = list(store_config.zones.keys())[0]
+            elif "skincare" in orig_zone_lower:
+                for target_zone_id in store_config.zones:
+                    if "skincare" in target_zone_id.lower():
+                        mapped_zone = target_zone_id
+                        break
+                if not mapped_zone:
+                    if "central_retail" in store_config.zones:
+                        mapped_zone = "central_retail"
+                    elif store_config.zones:
+                        mapped_zone = list(store_config.zones.keys())[0]
+            elif "billing" in orig_zone_lower or "checkout" in orig_zone_lower:
+                mapped_zone = store_config.get_billing_zone_id()
+            else:
+                if orig_zone in store_config.zones:
+                    mapped_zone = orig_zone
+                else:
+                    if "central_retail" in store_config.zones:
+                        mapped_zone = "central_retail"
+                    elif store_config.zones:
+                        mapped_zone = list(store_config.zones.keys())[0]
+
+        raw["zone_id"] = mapped_zone
+
+        cameras_by_type = {}
+        for cam_cfg in store_config.cameras.values():
+            cam_type = cam_cfg.get("type")
+            cameras_by_type.setdefault(cam_type, []).append(cam_cfg.get("camera_id"))
+
+        if event_type in ("ENTRY", "EXIT") and not mapped_zone:
+            entries = cameras_by_type.get("ENTRY", [])
+            if entries:
+                visitor_hash = hash(raw.get("visitor_id", ""))
+                raw["camera_id"] = entries[visitor_hash % len(entries)]
+            else:
+                raw["camera_id"] = "cam_entry_01"
+        elif mapped_zone == store_config.get_billing_zone_id() or event_type == "ZONE_ENTER" and mapped_zone == "checkout":
+            billings = cameras_by_type.get("BILLING", [])
+            raw["camera_id"] = billings[0] if billings else "cam_billing_01"
+        else:
+            assigned = False
+            for cam_cfg in store_config.cameras.values():
+                if cam_cfg.get("monitored_zone") == mapped_zone:
+                    raw["camera_id"] = cam_cfg.get("camera_id")
+                    assigned = True
+                    break
+            if not assigned:
+                zones_cams = cameras_by_type.get("ZONE", [])
+                if zones_cams:
+                    raw["camera_id"] = zones_cams[0]
+                else:
+                    raw["camera_id"] = "cam_zone_01"
+
+        if "metadata" in raw:
+            if mapped_zone and mapped_zone not in raw["metadata"].get("zones_visited", []):
+                raw["metadata"]["zones_visited"] = [mapped_zone]
+            if mapped_zone == store_config.get_billing_zone_id():
+                raw["metadata"]["billing_zone_seen"] = True
+                raw["metadata"]["conversion_status"] = "CONVERTED"
+                raw["metadata"]["session_state"] = "CONVERTED"
+
+        return raw
 
     # ──────────────────────────────────────────────────────────────────────────
     # REPLAY mode
@@ -319,27 +595,25 @@ class PipelineOrchestrator:
     def _run_replay(self) -> None:
         """
         REPLAY pipeline mode.
-
-        Reads data/events.jsonl line by line and re-publishes each event to
-        Kafka, preserving the original inter-event timestamp deltas scaled by
-        replay_speed_multiplier.
-
-        This allows deterministic load testing and development without a live
-        camera feed.
+        Reads data/events.jsonl line by line, maps event attributes dynamically,
+        and republishes to Kafka.
         """
         events_path = self._settings.events_jsonl_path
         if not events_path.exists():
-            raise FileNotFoundError(
-                f"Replay events file not found: {events_path}. "
-                "Run in LIVE mode first to generate events.jsonl, "
-                "or place a pre-recorded file at data/events.jsonl."
-            )
+            from config_loader import get_project_root
+            events_path = get_project_root() / "services" / "pipeline" / "data" / "events.jsonl"
+            if not events_path.exists():
+                raise FileNotFoundError(f"Replay events file not found: {events_path}")
+
+        from config_loader import load_store_config
+        store_config = load_store_config(self._settings.store_id)
 
         speed = self._settings.replay_speed_multiplier
         logger.info(
             "replay_pipeline_start",
             events_file=str(events_path),
             speed_multiplier=speed,
+            store_id=store_config.store_id,
         )
 
         event_count = 0
@@ -356,29 +630,38 @@ class PipelineOrchestrator:
 
                 try:
                     raw = json.loads(line)
+                    # Dynamically map the event to the current store configuration
+                    raw = self._map_replay_event(raw, store_config)
                 except json.JSONDecodeError as exc:
                     logger.warning("replay_bad_line", error=str(exc), line=line[:80])
                     continue
 
-                # Parse the original event timestamp
                 try:
                     event_ts = datetime.fromisoformat(raw["timestamp"])
                 except (KeyError, ValueError) as exc:
                     logger.warning("replay_missing_timestamp", error=str(exc))
                     continue
 
-                # ── Timing: sleep to replay at original cadence ─────────────
                 if prev_event_ts is not None:
                     original_delta_s = (event_ts - prev_event_ts).total_seconds()
                     if original_delta_s > 0:
                         sleep_s = original_delta_s / speed
-                        # Don't sleep for more than 30 seconds to avoid stalls
                         sleep_s = min(sleep_s, 30.0)
-                        time.sleep(sleep_s)
+                        elapsed = 0.0
+                        step = 0.1
+                        while elapsed < sleep_s and self._running:
+                            time.sleep(min(step, sleep_s - elapsed))
+                            elapsed += step
+
+                if not self._running:
+                    break
 
                 prev_event_ts = event_ts
 
-                # ── Reconstruct and re-publish the event ────────────────────
+                # Update timestamp to present to keep metrics and dashboards live
+                raw["timestamp"] = datetime.now(timezone.utc).isoformat()
+                # Regenerate event_id to ensure unique dedup keys per replay pass
+                raw["event_id"] = str(uuid.uuid4())
                 try:
                     event = RetailEvent(**raw)
                 except Exception as exc:
@@ -387,17 +670,14 @@ class PipelineOrchestrator:
 
                 self._producer.publish(event)
                 event_count += 1
+                self._write_heartbeat(event.timestamp)
 
-                # Write heartbeat on every event to keep /health fresh
-                self._write_heartbeat(event_ts)
-
-                # Flush every 50 events to avoid buffer buildup
                 if event_count % 50 == 0:
                     self._producer.flush(timeout=2.0)
                     logger.info(
                         "replay_progress",
                         events_replayed=event_count,
-                        event_ts=event_ts.isoformat(),
+                        event_ts=event.timestamp.isoformat(),
                     )
 
         self._producer.flush(timeout=5.0)
@@ -411,10 +691,6 @@ class PipelineOrchestrator:
         """
         Write current timestamp to Redis so the API /health endpoint
         can verify the pipeline is alive.
-
-        Key:  fluxretail:pipeline_heartbeat
-        TTL:  REDIS_HEARTBEAT_TTL_SECONDS  (auto-expires if pipeline crashes)
-        Read: services/api/routers/health.py :: _check_pipeline_heartbeat()
         """
         if self._redis is None:
             return
@@ -425,7 +701,6 @@ class PipelineOrchestrator:
                 datetime.now(timezone.utc).isoformat(),
             )
         except Exception as exc:
-            # Non-critical — don't let heartbeat failure crash the pipeline
             logger.warning("heartbeat_write_failed", error=str(exc))
 
     def _register_signal_handlers(self) -> None:

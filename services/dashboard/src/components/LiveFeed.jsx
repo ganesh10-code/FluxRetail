@@ -1,11 +1,25 @@
 import { Activity } from 'lucide-react'
 
 const EVENT_STYLES = {
-  ENTRY: { color: '#00F5D4', label: 'ENTRY' },
-  EXIT: { color: '#F43F5E', label: 'EXIT' },
-  ZONE_ENTER: { color: '#6C63FF', label: 'ZONE IN' },
+  ENTRY:     { color: '#00F5D4', label: 'ENTRY' },
+  EXIT:      { color: '#F43F5E', label: 'EXIT' },
+  ZONE_ENTER:{ color: '#6C63FF', label: 'ZONE IN' },
   ZONE_EXIT: { color: '#6B7280', label: 'ZONE OUT' },
-  ZONE_DWELL: { color: '#F59E0B', label: 'DWELL' },
+  ZONE_DWELL:{ color: '#F59E0B', label: 'DWELL' },
+}
+
+const VISITOR_PREFIXES = ['Visitor', 'Shopper', 'Returning', 'Guest', 'Customer']
+
+/**
+ * Convert a UUID visitor_id to a deterministic, business-readable label.
+ * Consistent with the logic in EventLog.jsx — same UUID → same label.
+ */
+function toVisitorLabel(visitorId) {
+  if (!visitorId) return '—'
+  const seed = parseInt(visitorId.replace(/-/g, '').slice(-6), 16) || 0
+  const prefix = VISITOR_PREFIXES[seed % VISITOR_PREFIXES.length]
+  const num = String(seed % 1000).padStart(3, '0')
+  return `${prefix}-${num}`
 }
 
 export function LiveFeed({ recentEvents, totalEvents }) {
@@ -23,6 +37,7 @@ export function LiveFeed({ recentEvents, totalEvents }) {
       </div>
       {recent.map((event, idx) => {
         const style = EVENT_STYLES[event.event_type] || EVENT_STYLES.ZONE_EXIT
+        const visitorLabel = toVisitorLabel(event.visitor_id)
         return (
           <div
             key={`${event.event_id}-${idx}`}
@@ -37,11 +52,11 @@ export function LiveFeed({ recentEvents, totalEvents }) {
             </span>
             {event.zone_id && (
               <span className="text-xs" style={{ color: '#6B7280' }}>
-                → {event.zone_id.replace('_ZONE', '')}
+                → {event.zone_id.replace(/_ZONE/g, '').replace(/_/g, ' ')}
               </span>
             )}
-            <span className="text-xs truncate" style={{ color: '#4B5563' }}>
-              {event.visitor_id?.slice(0, 8)}
+            <span className="text-xs truncate font-medium" style={{ color: '#4B5563' }}>
+              {visitorLabel}
             </span>
           </div>
         )

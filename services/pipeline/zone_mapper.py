@@ -99,15 +99,70 @@ class ZoneMapper:
         events = mapper.update(tracked_persons, frame_w, frame_h, frame_timestamp_ms)
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, store_config: StoreConfig | None = None, camera_id: str | None = None) -> None:
+        from config_loader import StoreConfig
         self._settings = settings
+        self._store_config = store_config
+        self._camera_id = camera_id
         self._zones: list[ZonePolygon] = []
         self._line_y: float = settings.entry_line_y  # normalised
         self._track_states: dict[int, TrackZoneState] = {}
         self._dwell_interval_ms: int = settings.dwell_event_interval_seconds * 1000
 
     def load(self) -> None:
-        """Load zone definitions from YAML config."""
+        """Load zone definitions dynamically from StoreConfig or fallback to YAML config."""
+        if self._store_config is not None:
+            # Dynamic store configuration path
+            cam_cfg = None
+            if self._camera_id:
+                for k, cfg in self._store_config.cameras.items():
+                    if cfg.get("camera_id") == self._camera_id:
+                        cam_cfg = cfg
+                        break
+
+            # If camera has an entry_line config, set the crossing line Y coordinate
+            if cam_cfg and "entry_line" in cam_cfg:
+                entry_line = cam_cfg["entry_line"]
+                if "start" in entry_line:
+                    self._line_y = float(entry_line["start"][1])
+
+            self._zones = []
+            
+            # Load top-level zones
+            for zone_id, cfg in self._store_config.zones.items():
+                if "polygon" in cfg:
+                    self._zones.append(
+                        ZonePolygon(
+                            zone_id=zone_id,
+                            display_name=cfg.get("display_name", zone_id),
+                            polygon_norm=[tuple(p) for p in cfg["polygon"]],
+                            color=(0, 255, 0),
+                        )
+                    )
+
+            # Load specific billing zone polygon under camera config if present
+            if cam_cfg and "billing_zone" in cam_cfg and "polygon" in cam_cfg["billing_zone"]:
+                billing_zone_id = self._store_config.get_billing_zone_id()
+                # Remove duplicate if already added
+                self._zones = [z for z in self._zones if z.zone_id != billing_zone_id]
+                self._zones.append(
+                    ZonePolygon(
+                        zone_id=billing_zone_id,
+                        display_name=self._store_config.get_zone_display_name(billing_zone_id),
+                        polygon_norm=[tuple(p) for p in cam_cfg["billing_zone"]["polygon"]],
+                        color=(0, 0, 255),
+                    )
+                )
+
+            logger.info(
+                "zones_loaded_dynamically",
+                camera_id=self._camera_id,
+                count=len(self._zones),
+                zone_ids=[z.zone_id for z in self._zones],
+                entry_line_y=self._line_y,
+            )
+            return
+
         config_path = self._settings.zones_config_path
         if not config_path.exists():
             logger.warning(

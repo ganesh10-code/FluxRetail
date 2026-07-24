@@ -41,12 +41,10 @@ class PersonTracker:
     def load(self) -> None:
         """Initialise the ByteTrack tracker. Call once at startup."""
         try:
-            from boxmot import ByteTrack
+            from boxmot import BYTETracker
 
-            self._tracker = ByteTrack(
-                track_high_thresh=0.5,
-                track_low_thresh=0.1,
-                new_track_thresh=0.6,
+            self._tracker = BYTETracker(
+                track_thresh=0.5,
                 track_buffer=30,
                 match_thresh=0.8,
             )

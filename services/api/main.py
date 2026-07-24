@@ -91,9 +91,17 @@ app.add_middleware(
 )
 
 # ── Routers ────────────────────────────────────────────────────────────────────
+from routers import stores
+from fastapi.staticfiles import StaticFiles
+from config_loader import get_project_root
+
 app.include_router(health.router)
 app.include_router(events.router, prefix="/api/v1")
 app.include_router(metrics.router, prefix="/api/v1")
+app.include_router(stores.router, prefix="/api/v1")
+
+# Mount data folder for layouts and frames snapshots
+app.mount("/data", StaticFiles(directory=str(get_project_root() / "data")), name="data")
 
 
 # ── WebSocket endpoint ─────────────────────────────────────────────────────────

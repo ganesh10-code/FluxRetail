@@ -9,9 +9,16 @@ Responsibilities:
   - Return a typed list of Detection objects
 
 Frame skipping is handled by the Orchestrator, not here.
+
+SINGLETON:
+  Use get_singleton_detector(settings) to obtain the shared model instance.
+  This ensures YOLO is loaded exactly once globally, preventing OMP thread
+  exhaustion when multiple camera threads are active.
 """
 
 from __future__ import annotations
+
+import threading
 
 import structlog
 import numpy as np
@@ -25,13 +32,38 @@ logger = structlog.get_logger(__name__)
 # COCO class ID for 'person'
 _PERSON_CLASS_ID = 0
 
+# Module-level singleton — guarded by a lock for thread-safe initialisation
+_singleton_lock = threading.Lock()
+_singleton_instance: PersonDetector | None = None
+
+
+def get_singleton_detector(settings: Settings) -> PersonDetector:
+    """
+    Return the shared PersonDetector instance, creating and loading it on
+    first call.  Subsequent calls return the cached instance immediately.
+
+    Thread-safe: only one thread will ever call .load() regardless of how
+    many camera threads race here at startup.
+    """
+    global _singleton_instance
+    if _singleton_instance is not None:
+        return _singleton_instance
+    with _singleton_lock:
+        # Double-checked locking pattern
+        if _singleton_instance is None:
+            detector = PersonDetector(settings)
+            detector.load()
+            _singleton_instance = detector
+            logger.info("yolo_singleton_created")
+    return _singleton_instance
+
 
 class PersonDetector:
     """
     Thin wrapper around YOLOv8 that returns only person detections.
 
     Usage:
-        detector = PersonDetector(settings)
+        detector = get_singleton_detector(settings)  # preferred
         detections = detector.detect(frame)  # numpy HWC BGR frame
     """
 
@@ -41,6 +73,14 @@ class PersonDetector:
 
     def load(self) -> None:
         """Load the YOLO model. Call once at startup."""
+        import torch
+        import functools
+        try:
+            # Override weights_only default in PyTorch 2.6+ to allow loading YOLO model safely
+            torch.load = functools.partial(torch.load, weights_only=False)
+        except Exception:
+            pass
+
         logger.info(
             "loading_yolo_model",
             model=self._settings.yolo_model,

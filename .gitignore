@@ -40,13 +40,13 @@ out/
 # ── Data, Models, & Videos ─────────────────────────────────────────────────
 # Ignore YOLO model weights, video samples, and mock event logs
 *.pt
-*.mp4
-*.avi
 *.mov
-*.jsonl
 *.log
-data/sample.mp4
-data/events.jsonl
+*.mp4
+data/frames/
+data/replays/
+services/pipeline/data/
+
 
 # ── IDEs & OS ──────────────────────────────────────────────────────────────
 .vscode/
