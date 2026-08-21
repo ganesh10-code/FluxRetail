@@ -1,6 +1,6 @@
 # FluxRetail — Real-Time Retail Intelligence Platform
 
-FluxRetail is a production-grade, event-driven retail intelligence platform that transforms CCTV camera feeds into real-time operational analytics. Using computer vision, Kafka event streaming, and a reactive enterprise dashboard, FluxRetail lets retailers monitor occupancy, track customer journey funnels, detect queue congestion, and flag anomalies — across multiple stores simultaneously.
+FluxRetail is a production-grade, event-driven retail intelligence platform that transforms CCTV camera feeds into real-time operational analytics. Using computer vision, Kafka event streaming, and a reactive enterprise dashboard, FluxRetail lets retailers to monitor occupancy, track customer journey funnels, detect queue congestion, and flag anomalies — across multiple stores simultaneously.
 
 > **Dashboard URL (local dev):** [http://localhost:5173](http://localhost:5173)  
 > **API URL:** [http://localhost:8000](http://localhost:8000) — Swagger docs at [http://localhost:8000/docs](http://localhost:8000/docs)
@@ -27,10 +27,10 @@ That's it! You should now see the real-time Operations Console. For advanced dev
 
 Modern physical retail stores lack the operational visibility that online shopping provides by default. Retail managers struggle to answer critical real-time questions:
 
-- *What is our current store occupancy and conversion rate?*
-- *How long are customers dwelling in cosmetics vs. skincare zones?*
-- *Are checkout counters congested, causing queue bottlenecks?*
-- *Can we scale monitoring across multiple stores without GPU infrastructure?*
+- _What is our current store occupancy and conversion rate?_
+- _How long are customers dwelling in cosmetics vs. skincare zones?_
+- _Are checkout counters congested, causing queue bottlenecks?_
+- _Can we scale monitoring across multiple stores without GPU infrastructure?_
 
 FluxRetail solves these challenges by combining low-latency edge AI tracking with a decoupled event-driven backend and a professional enterprise operations console.
 
@@ -78,14 +78,14 @@ FluxRetail solves these challenges by combining low-latency edge AI tracking wit
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Computer Vision | YOLOv8n (Ultralytics), ByteTrack (`boxmot`), OpenCV |
-| Event Bus | Apache Kafka 3.7 (KRaft — no Zookeeper) |
-| Backend API | FastAPI (Python 3.11), SQLAlchemy Asyncio, asyncpg, Uvicorn |
-| Databases | PostgreSQL 15, Redis 7 (heartbeats & KPI cache) |
-| Frontend | React 18, Vite, TailwindCSS, Recharts, Lucide Icons |
-| Container | Docker, Docker Compose |
+| Layer           | Technology                                                  |
+| --------------- | ----------------------------------------------------------- |
+| Computer Vision | YOLOv8n (Ultralytics), ByteTrack (`boxmot`), OpenCV         |
+| Event Bus       | Apache Kafka 3.7 (KRaft — no Zookeeper)                     |
+| Backend API     | FastAPI (Python 3.11), SQLAlchemy Asyncio, asyncpg, Uvicorn |
+| Databases       | PostgreSQL 15, Redis 7 (heartbeats & KPI cache)             |
+| Frontend        | React 18, Vite, TailwindCSS, Recharts, Lucide Icons         |
+| Container       | Docker, Docker Compose                                      |
 
 ---
 
@@ -103,7 +103,7 @@ cameras:
     video_path: data/store_1/entry/main_entry.mp4
     entry_line:
       start: [0.05, 0.42]
-      end:   [0.95, 0.42]
+      end: [0.95, 0.42]
 zones:
   cosmetics:
     zone_id: cosmetics
@@ -137,13 +137,13 @@ Running deep learning inference on multiple video streams is computationally exp
 
 ## Replay / Live Hybrid Explanation
 
-| Camera | Mode | Behavior |
-|---|---|---|
-| Store 1 — Entrance | **Live** | Full YOLOv8n + ByteTrack inference, real crossing detection |
-| Store 1 — Zone 1 | **Live** | Full YOLOv8n + ByteTrack inference, zone polygon mapping |
-| Store 1 — Billing | **Inactive** | JPEG snapshot every 1.5s + dynamic event replay |
-| Store 1 — Zone 2 | **Inactive** | JPEG snapshot every 1.5s + dynamic event replay |
-| Store 2 — All cameras | **Inactive** | Full snapshot + replay engine mapped to Store 2 layout |
+| Camera                | Mode         | Behavior                                                    |
+| --------------------- | ------------ | ----------------------------------------------------------- |
+| Store 1 — Entrance    | **Live**     | Full YOLOv8n + ByteTrack inference, real crossing detection |
+| Store 1 — Zone 1      | **Live**     | Full YOLOv8n + ByteTrack inference, zone polygon mapping    |
+| Store 1 — Billing     | **Inactive** | JPEG snapshot every 1.5s + dynamic event replay             |
+| Store 1 — Zone 2      | **Inactive** | JPEG snapshot every 1.5s + dynamic event replay             |
+| Store 2 — All cameras | **Inactive** | Full snapshot + replay engine mapped to Store 2 layout      |
 
 Inactive mode cameras produce identical UX (live snapshots + event log entries) without GPU/CPU overhead.
 
@@ -151,23 +151,24 @@ Inactive mode cameras produce identical UX (live snapshots + event log entries) 
 
 ## API Endpoints
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/health` | Full system health (Postgres, Redis, Kafka, Pipeline heartbeat) |
-| `GET` | `/docs` | Swagger UI — interactive API documentation |
-| `GET` | `/api/v1/events` | Paginated retail event log with filters |
-| `GET` | `/api/v1/metrics/snapshot` | Current KPI snapshot (occupancy, entries, conversion rate) |
-| `GET` | `/api/v1/metrics/funnel` | Visitor zone funnel analytics |
-| `GET` | `/api/v1/metrics/anomalies` | Detected anomalies (queue, dwell, occupancy) |
-| `GET` | `/api/v1/stores` | List of configured stores |
-| `GET` | `/api/v1/stores/{store_id}` | Store config + camera list |
-| `WS`  | `/ws/live` | WebSocket: real-time event + KPI stream |
+| Method | Path                        | Description                                                     |
+| ------ | --------------------------- | --------------------------------------------------------------- |
+| `GET`  | `/health`                   | Full system health (Postgres, Redis, Kafka, Pipeline heartbeat) |
+| `GET`  | `/docs`                     | Swagger UI — interactive API documentation                      |
+| `GET`  | `/api/v1/events`            | Paginated retail event log with filters                         |
+| `GET`  | `/api/v1/metrics/snapshot`  | Current KPI snapshot (occupancy, entries, conversion rate)      |
+| `GET`  | `/api/v1/metrics/funnel`    | Visitor zone funnel analytics                                   |
+| `GET`  | `/api/v1/metrics/anomalies` | Detected anomalies (queue, dwell, occupancy)                    |
+| `GET`  | `/api/v1/stores`            | List of configured stores                                       |
+| `GET`  | `/api/v1/stores/{store_id}` | Store config + camera list                                      |
+| `WS`   | `/ws/live`                  | WebSocket: real-time event + KPI stream                         |
 
 ---
 
 ## Setup Instructions
 
 ### Prerequisites
+
 - Docker Desktop (for Kafka, PostgreSQL, Redis)
 - Python 3.11 with `venv`
 - Node.js 20+
@@ -184,7 +185,8 @@ This is the recommended workflow for active development. Services run locally wi
 docker compose -f docker-compose.dev.yml up -d
 docker compose -f docker-compose.dev.yml ps
 ```
-*Wait ~30 seconds for Kafka to show `healthy`.*
+
+_Wait ~30 seconds for Kafka to show `healthy`._
 
 ### Step 2 — Initialize Database (First-Time Only)
 
@@ -232,6 +234,7 @@ npm run dev
 This mode launches all 6 services in containers with a single command. Recommended for evaluators and clean-machine testing.
 
 ### Prerequisites
+
 - Docker Desktop running
 - `docker compose` v2+ installed
 
@@ -251,14 +254,14 @@ docker compose logs -f api
 
 ### What starts automatically
 
-| Container | Service | Port |
-|---|---|---|
-| `fluxretail-kafka` | Apache Kafka (KRaft) | 9092 |
-| `fluxretail-postgres` | PostgreSQL 15 | 5433 |
-| `fluxretail-redis` | Redis 7 | 6379 |
-| `fluxretail-api` | FastAPI + Kafka Consumer | **8000** |
-| `fluxretail-pipeline` | YOLOv8 CV Pipeline | — |
-| `fluxretail-dashboard` | React Dashboard (Vite) | **5173** |
+| Container              | Service                  | Port     |
+| ---------------------- | ------------------------ | -------- |
+| `fluxretail-kafka`     | Apache Kafka (KRaft)     | 9092     |
+| `fluxretail-postgres`  | PostgreSQL 15            | 5433     |
+| `fluxretail-redis`     | Redis 7                  | 6379     |
+| `fluxretail-api`       | FastAPI + Kafka Consumer | **8000** |
+| `fluxretail-pipeline`  | YOLOv8 CV Pipeline       | —        |
+| `fluxretail-dashboard` | React Dashboard (Vite)   | **5173** |
 
 ### Startup Order (auto-managed via healthchecks)
 
@@ -273,17 +276,21 @@ redis (healthy) ─┘                    └─→ dashboard (starts)
 **API Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
 
 ### Stop & Clean Up
+
 #### only to stop the services:
+
 ```bash
 docker compose stop
 ```
 
 #### to restart the services:
+
 ```bash
 docker compose restart
-``` 
+```
 
 #### to stop and remove the container:
+
 ```bash
 docker compose down
 docker compose down -v   # also removes volumes (full reset)
@@ -291,10 +298,10 @@ docker compose down -v   # also removes volumes (full reset)
 
 ### Dual-Mode File Reference
 
-| File | Purpose |
-|---|---|
+| File                     | Purpose                                                      |
+| ------------------------ | ------------------------------------------------------------ |
 | `docker-compose.dev.yml` | Infrastructure only (Kafka + Postgres + Redis) for local dev |
-| `docker-compose.yml` | Full production stack — all 6 services |
+| `docker-compose.yml`     | Full production stack — all 6 services                       |
 
 ---
 
@@ -359,12 +366,12 @@ FluxRetail/
 ## Git Ignore Policy
 
 To keep the repository lightweight and prevent secret leakage or large file check-ins, the following items are excluded from version control via `.gitignore`:
+
 - **Environment & Secrets**: `.env` and any other local `.env.*.local` files to protect credentials.
 - **Python Virtual Environments**: Local dependencies and caches (`venv/`, `.venv/`, `__pycache__/`, `*.pyc`).
 - **Frontend Dependencies & Builds**: `node_modules/` and production build outputs (`dist/`, `build/`).
 - **Heavy Media & ML Models**: YOLOv8n model weights (`*.pt`), raw CCTV footage (`*.mp4`, `*.mov`), and run logs (`*.log`).
 - **Runtime Generated Data**: Live camera snapshot frames (`data/frames/`), transaction replay logs (`data/replays/`), and pipeline-generated events (`services/pipeline/data/`).
-
 
 ---
 
@@ -383,21 +390,27 @@ To keep the repository lightweight and prevent secret leakage or large file chec
 ## Screenshots
 
 ### 1. System Architecture
+
 ![Architecture](docs/screenshots/architecture_diagram.png)
 
 ### 2. Live Dashboard Overview
+
 ![Dashboard Overview](docs/screenshots/dashboard_overview.png)
 
 ### 3. Live Snapshots Feed
+
 ![Live Snapshots](docs/screenshots/live_snapshots.png)
 
 ### 4. Visitor Funnel Analytics
+
 ![Funnel View](docs/screenshots/funnel_view.png)
 
 ### 5. Anomaly Detection Console
+
 ![Anomaly Panel](docs/screenshots/anomaly_panel.png)
 
 ### 6. Store Layout Blueprints
+
 ![Layout Overlay](docs/screenshots/layout_overlay.png)
 
 ---
